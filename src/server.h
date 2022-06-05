@@ -3,8 +3,7 @@
 
 #include "parser.h"
 
-int load_file(char* path, char* uri);
-//int serve(struct http_request* req);
+int load_file(char* path, char* uri, char* type);
 int server_thread();
 int server_init(int port);
 int server_stop();
