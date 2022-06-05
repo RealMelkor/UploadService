@@ -5,6 +5,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include "server.h"
+#include "sandbox.h"
 
 int main(int argc, char* argv[]) {
 	int port = 8080;
@@ -18,6 +19,7 @@ int main(int argc, char* argv[]) {
 	load_file("static/favicon.ico", "/favicon.ico", "image/x-icon");
 	load_file("static/1.jpg", "/1.jpg", "image/jpg");
 	load_file("static/aabb.gif", "/test.gif", "image/gif");
+	sandbox_start();
 	if (server_init(port)) {
 		printf("Failed to initialize the server\n");
 		return -1;

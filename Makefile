@@ -3,7 +3,7 @@ SHELL = /bin/sh
 PREFIX = /usr/local
 CFLAGS = -O2 -Wall -Wpedantic -Wextra
 CC = cc
-SRC = src/main.c src/parser.c src/server.c
+SRC = src/main.c src/parser.c src/server.c src/sandbox.c
 
 upload: src/*
 	${CC} ${SRC} ${CFLAGS} -o $@
