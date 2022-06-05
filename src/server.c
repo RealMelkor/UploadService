@@ -6,8 +6,10 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
-
-#include <errno.h>
+#ifdef __linux__
+size_t
+strlcpy(char *dst, const char *src, size_t dsize);
+#endif
 
 char header[] = 
 "HTTP/1.0 200 OK\r\n"
@@ -17,9 +19,6 @@ char header[] =
 "Server: uploadservice\r\n\r\n";
 //"Date: Sun, 05 Jun 2022 14:20:40 GMT\r\n"
 //"Last-Modified: Mon, 01 Jun 2022 09:55:40 GMT\r\n"
-
-size_t
-strlcpy(char *dst, const char *src, size_t dsize);
 
 void print_now() {
 	time_t now = time(NULL);
@@ -56,7 +55,10 @@ int files_count;
 
 int load_file(char* path, char* uri, char* type) {
 	FILE* f = fopen(path, "rb");
-	if (!f) return -1;
+	if (!f) {
+		printf("%s: failed to open file\n", path);
+		return -1;
+	}
 	fseek(f, 0, SEEK_END);
 	size_t len = ftell(f);
 	fseek(f, 0, SEEK_SET);
@@ -74,6 +76,7 @@ int load_file(char* path, char* uri, char* type) {
 	if (fread(&file->data[header_len], 1, len, f) != len) {
 		free(file->data);
 		fclose(f);
+		printf("%s: failed to read file content\n", path);
 		return -1;
 	}
 	file->uri = malloc(strlen(uri));
@@ -126,9 +129,7 @@ int server_serve(struct http_request* req) {
 	}
 	size_t bytes = 0;
 	while (bytes < file->size) {
-		errno = 0;
 		int ret = send(req->socket, &file->data[bytes], file->size - bytes, 0);
-		//printf("%ld/%ld, %d, %s\n", bytes+ret, file->size, ret, strerror(errno));
 		if (ret <= 0) break;
 		bytes += ret;
 	}
@@ -142,14 +143,13 @@ int server_init(int port) {
 		printf("Failed to create socket\n");
 		return -1;
 	}
-	// instant reset
-	/*
+#ifdef DEBUG
+	// instant reset, useful for testing
 	struct linger sl;
         sl.l_onoff = 1;
         sl.l_linger = 0;
         setsockopt(listener, SOL_SOCKET, SO_LINGER, &sl, sizeof(sl));
-	*/
-	//
+#endif
 	struct sockaddr_in addr;
 	bzero(&addr, sizeof(addr));
 	addr.sin_family = AF_INET;
@@ -169,15 +169,13 @@ int server_init(int port) {
 }
 
 int server_accept(struct http_request* req) {
-	struct sockaddr_in addr;
-	unsigned int len = sizeof(addr);
-	errno = 0;
-	int socket = accept(listener, (struct sockaddr*)&addr, &len);
+	bzero(req, sizeof(struct http_request));
+	unsigned int len = sizeof(req->addr);
+	int socket = accept(listener, (struct sockaddr*)&req->addr, &len);
 	if (socket == -1) {
-		printf("Failed to accept socket, %s\n", strerror(errno));
+		printf("Failed to accept socket\n");
 		return -1;
 	}
-	bzero(req, sizeof(struct http_request));
 	req->socket = socket;
 	return 0;
 }
@@ -204,8 +202,14 @@ int server_thread() {
 
 		print_now();
 		int ret = server_serve(&req);
+#ifdef NO_PROXY
+		uint8_t* ptr = (uint8_t*)&req.addr.sin_addr.s_addr;
+		printf("%d.%d.%d.%d, %s, requested %s [%d]\n",
+		       ptr[0], ptr[1], ptr[2], ptr[3], req.useragent, req.uri, ret);
+#else
 		printf("%s, %s, requested %s [%d]\n",
 		       req.xrealip, req.useragent, req.uri, ret);
+#endif
 		close(req.socket);
 	}
 	return 0;
