@@ -23,8 +23,16 @@ struct http_request {
 	char xforwardedproto[128];
 	char version[128];
 	char uri[4096];
+	char contentlength[32];
+	char contenttype[512];
+	char boundary[512];
+	int boundary_found;
+	size_t size;
+	char* content;
+	size_t content_allocated;
+	char packet[4096];
 };
 
-int http_parse(const char* request, int maxlen, struct http_request* req);
+int http_parse(struct http_request* req);
 
 #endif

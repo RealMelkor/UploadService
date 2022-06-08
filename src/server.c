@@ -1,9 +1,11 @@
+#define _GNU_SOURCE
 #include "server.h"
 #include "parser.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 #include <unistd.h>
 #ifdef __linux__
@@ -17,8 +19,6 @@ char header[] =
 "Content-Length: %d\r\n"
 "Content-Type: %s\r\n"
 "Server: uploadservice\r\n\r\n";
-//"Date: Sun, 05 Jun 2022 14:20:40 GMT\r\n"
-//"Last-Modified: Mon, 01 Jun 2022 09:55:40 GMT\r\n"
 
 void print_now() {
 	time_t now = time(NULL);
@@ -95,6 +95,7 @@ int load_file(char* path, char* uri, char* type) {
 	return 0;
 }
 
+#include <sys/stat.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 
@@ -108,13 +109,145 @@ char data_404[] =
 "</body>\n"
 "</html>\n";
 
+char data_upload[] = 
+"<html>\n"
+"<head>\n"
+"        <title>File uploaded</title>\n"
+"</head>\n"
+"<body>\n"
+"        <h1>File succesfully uploaded</h1>\n"
+"        <p>Download link : <a href=\"%s\">%s</a></p>\n"
+"</body>\n"
+"</html>\n";
+
+int server_upload(struct http_request* req) {
+	if (!req->content) return -1;
+		int boundary_len = strnlen(req->boundary, sizeof(req->boundary));
+	char* end = memmem(&req->content[req->size - boundary_len*2], boundary_len * 2, 
+			   req->boundary, boundary_len);
+	if (!end) return -1;
+	end -= 4;
+
+	// path + name
+	char* start = strstr(req->content, "\r\n\r\n");
+	if (!start) start = req->content;
+	char file_name[256];
+	char* name_ptr = strstr(start, "filename=\"");
+	int name_fail = 1;
+	if (name_ptr) {
+		name_ptr += sizeof("filename=\"") - 1;
+		char* name_end = strstr(name_ptr, "\"\r\n");
+		if (name_end && (size_t)(name_end - name_ptr) < sizeof(file_name)) {
+			strlcpy(file_name, name_ptr, name_end - name_ptr + 1);
+			name_fail = 0;
+		}
+	}
+	if (name_fail) {
+		strlcpy(file_name, "generic.dat", sizeof(file_name));
+	}
+	time_t now = time(NULL);
+	int hash = fnv(start, end - start) + fnv((char*)&now, sizeof(now));
+	int hash2 = fnv(req->boundary, boundary_len) - fnv((char*)&now, sizeof(now));
+	char path[1024];
+	snprintf(path, sizeof(path), "/download/%x%x/%s", hash, hash2, file_name);
+	char file_path[1024];
+	//
+
+	start = strstr(start+4, "\r\n\r\n");
+	if (!start) start = req->content;
+	start += 4;
+	char* slash_ptr = strrchr(path, '/');
+	if (!slash_ptr) return -1;
+	*slash_ptr = '\0';
+	mkdir(&path[1], 0700);
+	*slash_ptr = '/';
+	FILE* f = fopen((char*)&path[1], "wb");
+	printf("%s\n", &file_path[1]);
+	if (!f)
+		return -1;
+	if (fwrite(start, 1, end - start, f) != (size_t)(end - start))
+		return -1;
+	fclose(f);
+	//
+	char data[2048];
+	int len = snprintf(data, sizeof(data), data_upload, path, file_name);
+	char up_header[1024];
+	snprintf(up_header, sizeof(up_header), header, len, "text/html");
+	char packet[4096];
+	size_t size = snprintf(packet, sizeof(packet), "%s%s", up_header, data);
+	size_t bytes = 0;
+	while (bytes < size) {
+		int ret = send(req->socket, &packet[bytes], size - bytes, 0);
+		if (ret <= 0) break;
+		bytes += ret;
+	}
+	return 200;
+}
+
+int server_download(struct http_request* req) {
+	char* ptr = strstr(req->uri, "/download/");
+	if (!ptr) {
+		return -1;
+	}
+	ptr += sizeof("/download/") - 1;
+	char* file_name = strchr(ptr, '/');
+	if (!file_name)
+		return -1;
+	*file_name = '\0';
+	char* error = NULL;
+	long long hash = strtoull(ptr, &error, 16);
+	printf("%llx, %s, %d\n", hash, ptr, *error);
+	if (!hash || (error && *error))
+		return -1;
+	*file_name = '/';
+	printf("%s | %s, %llx\n", ptr, file_name, hash);
+	if ((file_name[1] == '.' &&
+	    file_name[2] == '.') ||
+	    strchr(file_name+1, '/')
+	   )
+		return -1;
+	file_name++;
+	ptr -= sizeof("/download/") - 2;
+	printf("open : %s\n", ptr);
+	FILE* f = fopen(ptr, "rb");
+	if (!f) return -1;
+	fseek(f, 0, SEEK_END);
+	size_t length = ftell(f);
+	fseek(f, 0, SEEK_SET);
+	char* data = malloc(length);
+	if (fread(data, 1, length, f) != length) {
+		free(data);
+		fclose(f);
+		return -1;
+	}
+	size_t bytes = 0;
+	while (bytes < length) {
+		int ret = send(req->socket, &data[bytes], length - bytes, 0);
+		if (ret <= 0) break;
+		bytes += ret;
+	}
+	fclose(f);
+	free(data);
+	return 0;
+}
+
 int server_serve(struct http_request* req) {
+	if (req->method == POST && !strncmp(req->uri, "/upload", sizeof(req->uri))) {
+		if (!server_upload(req)) return 0;
+		else goto err_404;
+	}
+	if (req->method == GET && !strncmp(req->uri, "/download/", sizeof("/download/") - 1)) {
+		if (!server_download(req)) return 0;
+		else goto err_404;
+	}
+	if (req->method != GET) goto err_404;
 	int hash = fnv(req->uri, strnlen(req->uri, sizeof(req->uri)));
 	struct file* file = NULL;
 	for (int i = 0; i < files_count; i++) {
 		if (hash == files[i].hash) file = &files[i];
 	}
 	if (file == NULL) {
+err_404:;
 		char packet[4096];
 		bzero(packet, sizeof(packet));
 		size_t l = snprintf(packet, sizeof(packet),
@@ -181,36 +314,116 @@ int server_accept(struct http_request* req) {
 }
 
 int server_recv(struct http_request* req) {
-	char packet[4096];
-	int bytes = recv(req->socket, packet, sizeof(packet), 0);
+	if (req->size < sizeof(req->packet) - sizeof(req->packet)/4) {
+		req->content = (char*)req->packet;
+	} else if (req->size + sizeof(req->packet)*2 >= req->content_allocated){
+		int copy = 0;
+		if (req->content == req->packet) {
+			req->content = NULL;
+			copy = 1;
+		}
+		req->content = realloc(req->content,
+				req->content_allocated + sizeof(req->packet) * 2);
+		if (copy)
+			strlcpy(req->content, req->packet, req->size);
+		req->content_allocated += sizeof(req->packet) * 2;
+	}
+	int bytes = recv(req->socket,
+			(req->content == req->packet)?
+			(&req->content[req->size]):
+			req->packet,
+			(req->content == req->packet)?
+			(sizeof(req->packet) - req->size):
+			sizeof(req->packet),
+			0);
+	if (req->content != req->packet) {
+		memcpy(&req->content[req->size], req->packet, bytes);
+	}
 	if (bytes <= 0) return -1;
-	if (http_parse(packet, bytes, req)) {
-		printf("Invalid request\n");
+	if (!req->boundary_found) {
+		char* ptr = strstr(&req->content[req->size], "boundary=");
+		if (ptr) {
+			ptr += sizeof("boundary=");
+			char* start = ptr;	
+			while (ptr++ && *ptr != '\r');
+			strlcpy(req->boundary, start, ptr - start);
+			req->boundary_found = 1;
+		}
+	}
+	req->size += bytes;
+	while (req->boundary_found) {
+		char* ptr = strstr(req->content, req->boundary);
+		if (!ptr) break;
+		ptr = strstr(ptr+1, req->boundary);
+		if (!ptr) break;
+		int blen = strnlen(req->boundary, sizeof(req->boundary));
+		void* end = memmem(&req->content[req->size - blen * 2 + 1], bytes, req->boundary, blen);
+		if (!end || end <= (void*)ptr) break;
+		return 0;
+	}
+	if (!req->boundary_found &&
+	    req->content[req->size-1] == '\n' &&
+	    req->content[req->size-2] == '\r' &&
+	    req->content[req->size-3] == '\n' &&
+	    req->content[req->size-4] == '\r') {
+		return 0;
+	}
+	return 1;
+}
+
+#include <poll.h>
+struct http_request requests[1024];
+struct pollfd fds[1024];
+int requests_count = 0;
+
+int new_request() {
+	bzero(&requests[requests_count], sizeof(struct http_request));
+	if (server_accept(&requests[requests_count])) {
 		return -1;
 	}
+	fds[requests_count+1].fd = requests[requests_count].socket;
+	fds[requests_count+1].events = POLLIN;
+	requests_count++;
 	return 0;
 }
 
-int server_thread() {
-	while (1) {
-		struct http_request req;
-		if (server_accept(&req)) continue;
-		if (server_recv(&req)) {
-			close(req.socket);
-			continue;
-		}
-
-		print_now();
-		int ret = server_serve(&req);
+void print_req(struct http_request* req, int code) {
 #ifdef NO_PROXY
-		uint8_t* ptr = (uint8_t*)&req.addr.sin_addr.s_addr;
-		printf("%d.%d.%d.%d, %s, requested %s [%d]\n",
-		       ptr[0], ptr[1], ptr[2], ptr[3], req.useragent, req.uri, ret);
+	uint8_t* ptr = (uint8_t*)&req->addr.sin_addr.s_addr;
+	printf("%d.%d.%d.%d, %s, requested %s [%d]\n",
+	       ptr[0], ptr[1], ptr[2], ptr[3], req->useragent, req->uri, code);
 #else
-		printf("%s, %s, requested %s [%d]\n",
-		       req.xrealip, req.useragent, req.uri, ret);
+	printf("%s, %s, requested %s [%d]\n",
+	       req->xrealip, req->useragent, req->uri, code);
 #endif
-		close(req.socket);
+
+}
+
+int server_thread() {
+	fds[0].fd = listener;
+	fds[0].events = POLLIN;
+	while (1) {
+		int nfds = requests_count + 1;
+		int ready = poll(fds, nfds, -1);
+		if (ready == -1) break;
+		if (fds[0].revents == POLLIN) {
+			if (new_request()) printf("Failed to accept client\n");
+		}
+		for (int i = 0; i < requests_count; i++) {
+			if (fds[i+1].revents == POLLIN) {
+				int ret = server_recv(&requests[i]);
+				if (ret == 1) continue;
+				if (ret == 0) {
+					http_parse(&requests[i]);
+					server_serve(&requests[i]);
+				}
+				if (requests[i].packet != requests[i].content)
+					free(requests[i].content);
+
+				close(requests[i].socket);
+				bzero(&fds[i+1], sizeof(struct pollfd));
+			}
+		}
 	}
 	return 0;
 }

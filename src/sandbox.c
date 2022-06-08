@@ -1,5 +1,6 @@
 #include "sandbox.h"
 #include <unistd.h>
+#include <stdio.h>
 
 #ifdef __OpenBSD__
 int sandbox_start() {

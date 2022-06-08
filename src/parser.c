@@ -1,5 +1,6 @@
 #include "parser.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #ifdef __linux__
@@ -69,12 +70,22 @@ int get_parameter(struct http_request* req, char* name, int len, char** ptr, int
 		*psizeof = sizeof(req->useragent);
 		return 0;
 	}
+	if (!strncmp(name, "Content-Type", len)) {
+		*ptr = req->contenttype;
+		*psizeof = sizeof(req->contenttype);
+		return 0;
+	}
+	if (!strncmp(name, "Content-Length", len)) {
+		*ptr = req->contentlength;
+		*psizeof = sizeof(req->contentlength);
+		return 0;
+	}
 	return -1;
 }
 
-int http_parse(const char *request, int maxlen, struct http_request* req) {
-	const char* end = request + maxlen;
-	const char* ptr = request;
+int http_parse(struct http_request* req) {
+	const char* end = req->content + req->size;
+	const char* ptr = req->content;
 	int i = 0;
 	const char* pos[3];
 	// header
@@ -92,9 +103,9 @@ int http_parse(const char *request, int maxlen, struct http_request* req) {
 		i++;
 	}
 	char buf[64];
-	size_t len = pos[0] - request;
+	size_t len = pos[0] - req->content;
 	if (len >= sizeof(buf)) return -2;
-	strlcpy(buf, request, len);
+	strlcpy(buf, req->content, len);
 	req->method = parse_method(buf, len);
 	len = pos[1] - pos[0];
 	if (len >= sizeof(req->uri)) return -2;
@@ -105,20 +116,37 @@ int http_parse(const char *request, int maxlen, struct http_request* req) {
 
 	// parameters
 	int in_value = 0;
-	char parameter[256];
+	char parameter[4096];
 	char* value = NULL;
 	int sizeof_value = 0;
 	ptr+=2;
 	const char* start = ptr;
 	ptr--;
+	req->boundary_found = 0;
 	while (ptr++ && ptr < end - 1) {
+		if ((ptr-1)[0] == '\n' && req->boundary_found &&
+		    !memcmp(ptr, req->boundary, strnlen(req->boundary, sizeof(req->boundary)))) {
+			start = ptr;
+			break;
+		}
+		if (in_value && ptr + sizeof("boundary=") < end - 1 &&
+		    !memcmp(ptr, "boundary=", sizeof("boundary=")-1)) {
+			const char* bstart = ptr + sizeof("boundary=") - 1;
+			ptr += sizeof("boundary=") - 2;
+			while (ptr++ && ptr < end - 1 && *ptr != '\n' && *ptr != '\r')
+				req->boundary[ptr - bstart] = *ptr;
+			req->boundary_found = 1;
+		}
 		if (*ptr == '\r' && *(ptr+1) == '\n') {
 			ptr+=2;
 			start = ptr;
 			in_value = 0;
 		}
 		if (!in_value && *ptr == ':') {
-			parameter[ptr - start] = '\0';
+			if ((size_t)(ptr - start) > sizeof(parameter)) {
+				return -1;
+			}
+			strlcpy(parameter, start, ptr - start + 1);
 			if (!get_parameter(req, parameter, sizeof(parameter),
 					   &value, &sizeof_value)) {
 				while (++ptr && ptr < end - 1 && *ptr != ' ') ;
@@ -131,11 +159,10 @@ int http_parse(const char *request, int maxlen, struct http_request* req) {
 			start = ptr;
 		}
 		if (in_value) {
-			if (ptr - start > sizeof_value) return -1;
+			if (ptr - start > sizeof_value) {
+				return -1;
+			}
 			value[ptr - start] = *ptr;
-		} else {
-			if ((size_t)(ptr - start) > sizeof(parameter)) return -1;
-			parameter[ptr - start] = *ptr;
 		}
 	}
 	return 0;
