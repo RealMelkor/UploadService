@@ -181,7 +181,25 @@ int server_upload(struct http_request* req) {
 		if (ret <= 0) break;
 		bytes += ret;
 	}
-	return 200;
+	return 0;
+}
+
+const char* extension[] = {
+	".jpg",
+	".jpge",
+	".txt"
+};
+
+const char* mime[] = {
+	"image/jpeg",
+	"image/jpeg",
+	"text/plain"
+};
+
+int mime_from_extension(const char* ext) {
+	for (size_t i = 0; i < sizeof(mime)/sizeof(char*); i++)
+		if (!strcmp(ext, extension[i])) return i;
+	return -1;
 }
 
 int server_download(struct http_request* req) {
@@ -196,11 +214,9 @@ int server_download(struct http_request* req) {
 	*file_name = '\0';
 	char* error = NULL;
 	long long hash = strtoull(ptr, &error, 16);
-	printf("%llx, %s, %d\n", hash, ptr, *error);
 	if (!hash || (error && *error))
 		return -1;
 	*file_name = '/';
-	printf("%s | %s, %llx\n", ptr, file_name, hash);
 	if ((file_name[1] == '.' &&
 	    file_name[2] == '.') ||
 	    strchr(file_name+1, '/')
@@ -208,7 +224,6 @@ int server_download(struct http_request* req) {
 		return -1;
 	file_name++;
 	ptr -= sizeof("/download/") - 2;
-	printf("open : %s\n", ptr);
 	FILE* f = fopen(ptr, "rb");
 	if (!f) return -1;
 	fseek(f, 0, SEEK_END);
@@ -220,6 +235,15 @@ int server_download(struct http_request* req) {
 		fclose(f);
 		return -1;
 	}
+	char header_buf[1024];
+	// mime
+	char* ext = strrchr(file_name, '.');
+	int mime_id = !ext?-1:mime_from_extension(ext);
+	const char* mime_ptr = ((mime_id==-1)?"application/octet-stream":mime[mime_id]);
+	// header
+	int header_len = snprintf(header_buf, sizeof(header_buf),
+				   header, length, mime_ptr);
+	send(req->socket, header_buf, header_len, 0);
 	size_t bytes = 0;
 	while (bytes < length) {
 		int ret = send(req->socket, &data[bytes], length - bytes, 0);
@@ -233,11 +257,11 @@ int server_download(struct http_request* req) {
 
 int server_serve(struct http_request* req) {
 	if (req->method == POST && !strncmp(req->uri, "/upload", sizeof(req->uri))) {
-		if (!server_upload(req)) return 0;
+		if (!server_upload(req)) return 200;
 		else goto err_404;
 	}
 	if (req->method == GET && !strncmp(req->uri, "/download/", sizeof("/download/") - 1)) {
-		if (!server_download(req)) return 0;
+		if (!server_download(req)) return 200;
 		else goto err_404;
 	}
 	if (req->method != GET) goto err_404;
@@ -415,7 +439,7 @@ int server_thread() {
 				if (ret == 1) continue;
 				if (ret == 0) {
 					http_parse(&requests[i]);
-					server_serve(&requests[i]);
+					print_req(&requests[i], server_serve(&requests[i]));
 				}
 				if (requests[i].packet != requests[i].content)
 					free(requests[i].content);

@@ -1,6 +1,6 @@
 # UploadService
 
-Simple http server allowing users to upload their files and to download them
+Simple http server allowing users to upload their files and download them
 
 ## Build instructions
 
