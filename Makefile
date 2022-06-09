@@ -3,6 +3,9 @@ SHELL = /bin/sh
 PREFIX = /usr/local
 CFLAGS = -O2 -Wall -Wpedantic -Wextra
 CC = cc
+# Uncomment to build on Illumos
+#CFLAGS = -O2 -Wall -Wpedantic -Wextra -lsocket
+#CC = gcc
 SRC = src/main.c src/parser.c src/server.c src/sandbox.c
 
 upload: src/*
