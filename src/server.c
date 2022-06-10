@@ -187,13 +187,15 @@ int server_upload(struct http_request* req) {
 const char* extension[] = {
 	".jpg",
 	".jpge",
-	".txt"
+	".txt",
+	".zip"
 };
 
 const char* mime[] = {
 	"image/jpeg",
 	"image/jpeg",
-	"text/plain"
+	"text/plain",
+	"application/zip"
 };
 
 int mime_from_extension(const char* ext) {
@@ -224,10 +226,12 @@ int server_download(struct http_request* req) {
 		return -1;
 	file_name++;
 	ptr -= sizeof("/download/") - 2;
+	printf("path %s\n", ptr);
 	FILE* f = fopen(ptr, "rb");
 	if (!f) return -1;
 	fseek(f, 0, SEEK_END);
 	size_t length = ftell(f);
+	printf("reading %ld...\n", length);
 	fseek(f, 0, SEEK_SET);
 	char* data = malloc(length);
 	if (fread(data, 1, length, f) != length) {
@@ -235,6 +239,9 @@ int server_download(struct http_request* req) {
 		fclose(f);
 		return -1;
 	}
+	req->length = length;
+	req->data = data;
+	fclose(f);
 	char header_buf[1024];
 	// mime
 	char* ext = strrchr(file_name, '.');
@@ -244,15 +251,17 @@ int server_download(struct http_request* req) {
 	int header_len = snprintf(header_buf, sizeof(header_buf),
 				   header, length, mime_ptr);
 	send(req->socket, header_buf, header_len, 0);
-	size_t bytes = 0;
-	while (bytes < length) {
-		int ret = send(req->socket, &data[bytes], length - bytes, 0);
-		if (ret <= 0) break;
-		bytes += ret;
-	}
-	fclose(f);
-	free(data);
 	return 0;
+}
+
+int server_send(struct http_request* req) {
+	size_t to_send = req->length - req->sent;
+	if (to_send > 32768) to_send = 32768;
+	int ret = send(req->socket, &req->data[req->sent], to_send, 0);
+	if (ret <= 0) return -1;
+	req->sent += ret;
+	if (req->sent >= req->length) return 0;
+	return 1;
 }
 
 int server_serve(struct http_request* req) {
@@ -349,7 +358,7 @@ int server_recv(struct http_request* req) {
 		req->content = realloc(req->content,
 				req->content_allocated + sizeof(req->packet) * 2);
 		if (copy)
-			strlcpy(req->content, req->packet, req->size);
+			memcpy(req->content, req->packet, req->size+1);
 		req->content_allocated += sizeof(req->packet) * 2;
 	}
 	int bytes = recv(req->socket,
@@ -360,10 +369,10 @@ int server_recv(struct http_request* req) {
 			(sizeof(req->packet) - req->size):
 			sizeof(req->packet),
 			0);
+	if (bytes <= 0) return -1;
 	if (req->content != req->packet) {
 		memcpy(&req->content[req->size], req->packet, bytes);
 	}
-	if (bytes <= 0) return -1;
 	if (!req->boundary_found) {
 		char* ptr = strstr(&req->content[req->size], "boundary=");
 		if (ptr) {
@@ -434,17 +443,35 @@ int server_thread() {
 			if (new_request()) printf("Failed to accept client\n");
 		}
 		for (int i = 0; i < requests_count; i++) {
-			if (fds[i+1].revents == POLLIN) {
-				int ret = server_recv(&requests[i]);
-				if (ret == 1) continue;
-				if (ret == 0) {
-					http_parse(&requests[i]);
-					print_req(&requests[i], server_serve(&requests[i]));
+			struct http_request* req = &requests[i];
+			if (fds[i+1].revents == POLLOUT) {
+				if (req->length == req->sent) {
+					fds[i+1].events = POLLIN;
+					goto clean;
 				}
-				if (requests[i].packet != requests[i].content)
-					free(requests[i].content);
+send_data:;
+				int ret = server_send(req);
+				if (ret == 1 || ret == 0) continue;
+			}
+			if (fds[i+1].revents == POLLIN) {
+				if (requests[i].sent) {
+				} else {
+					int ret = server_recv(req);
+					if (ret == 1) continue;
+					if (ret == 0) {
+						http_parse(req);
+						print_req(req, server_serve(req));
+						fds[i+1].events = POLLOUT;
+						goto send_data;
+					}
+				}
+clean:
+				if (req->packet != req->content) {
+					free(req->content);
+					free(req->data);
+				}
 
-				close(requests[i].socket);
+				close(req->socket);
 				bzero(&fds[i+1], sizeof(struct pollfd));
 			}
 		}
