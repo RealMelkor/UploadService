@@ -13,6 +13,7 @@ enum method {
 };
 
 #include <netinet/in.h>
+#include <stdio.h>
 struct http_request {
 	int socket;
 	struct sockaddr_in addr;
@@ -31,9 +32,10 @@ struct http_request {
 	char* content;
 	size_t content_allocated;
 	char packet[4096];
-	char* data;
+	//char* data;
 	size_t length;
 	size_t sent;
+	FILE* data;
 };
 
 int http_parse(struct http_request* req);

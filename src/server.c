@@ -122,6 +122,25 @@ char data_upload[] =
 "</body>\n"
 "</html>\n";
 
+int path_to_url(const char* path, char* url, int len) {
+	int j = 0;
+	for (int i = 0; path[i] && j < len; i++) {
+		char c = path[i];
+		if ((c >= 'a' && c <= 'z') ||
+		    (c >= 'A' && c <= 'Z') ||
+		    (c >= '0' && c <= '9') ||
+		    c == '.' || c == '/') {
+			url[j] = path[i];
+			j++;
+			continue;
+		}
+		snprintf(&url[j], len - j, "%%%02X", c);
+		j += 3;
+	}
+	url[j] = '\0';
+	return j;
+}
+
 int server_upload(struct http_request* req) {
 	if (!req->content) return -1;
 		int boundary_len = strnlen(req->boundary, sizeof(req->boundary));
@@ -169,8 +188,10 @@ int server_upload(struct http_request* req) {
 		return -1;
 	fclose(f);
 	//
-	char data[2048];
-	int len = snprintf(data, sizeof(data), data_upload, path, file_name);
+	char data[4096];
+	char url[2048];
+	path_to_url(path, url, sizeof(url));
+	int len = snprintf(data, sizeof(data), data_upload, url, file_name);
 	char up_header[1024];
 	snprintf(up_header, sizeof(up_header), header, len, "text/html");
 	char packet[4096];
@@ -234,7 +255,7 @@ int is_hex(char c) {
 
 int format_path(const char* data, char* buf, int len) {
 	int j = 0;
-	for (int i = 0; data[i] && i < len; i++) {
+	for (int i = 0; data[i] && j < len; i++) {
 		while (data[i] == '%') {
 			char hex[3];
 			hex[0] = data[i+1];
@@ -283,21 +304,13 @@ int server_download(struct http_request* req) {
 	ptr -= sizeof("/download/") - 2;
 	char path[1024];
 	format_path(ptr, path, sizeof(path));
-	printf("path %s\n", path);
 	FILE* f = fopen(path, "rb");
 	if (!f) return -1;
 	fseek(f, 0, SEEK_END);
 	size_t length = ftell(f);
 	fseek(f, 0, SEEK_SET);
-	char* data = malloc(length);
-	if (fread(data, 1, length, f) != length) {
-		free(data);
-		fclose(f);
-		return -1;
-	}
 	req->length = length;
-	req->data = data;
-	fclose(f);
+	req->data = f;
 	char header_buf[1024];
 	// mime
 	char* ext = strrchr(file_name, '.');
@@ -311,11 +324,15 @@ int server_download(struct http_request* req) {
 }
 
 int server_send(struct http_request* req) {
+	char data[32768];
 	size_t to_send = req->length - req->sent;
 	if (to_send > 32768) to_send = 32768;
-	int ret = send(req->socket, &req->data[req->sent], to_send, 0);
+	if (fread(data, 1, to_send, req->data) != to_send) return -1;
+	int ret = send(req->socket, data, to_send, 0);
 	if (ret <= 0) return -1;
 	req->sent += ret;
+	if (ret != to_send)
+		fseek(req->data, req->sent, SEEK_SET);
 	if (req->sent >= req->length) return 0;
 	return 1;
 }
@@ -524,7 +541,8 @@ send_data:;
 clean:
 				if (req->packet != req->content) {
 					free(req->content);
-					free(req->data);
+					//free(req->data);
+					fclose(req->data);
 				}
 
 				close(req->socket);
