@@ -105,6 +105,7 @@ char data_404[] =
 "        <title>404 Not Found</title>\n"
 "</head>\n"
 "<body>\n"
+"        <a href=\"/\">Go back</a>\n"
 "        <h1>404 Not Found</h1>\n"
 "</body>\n"
 "</html>\n";
@@ -115,6 +116,7 @@ char data_upload[] =
 "        <title>File uploaded</title>\n"
 "</head>\n"
 "<body>\n"
+"        <a href=\"/upload\">Go back</a>\n"
 "        <h1>File succesfully uploaded</h1>\n"
 "        <p>Download link : <a href=\"%s\">%s</a></p>\n"
 "</body>\n"
@@ -150,7 +152,6 @@ int server_upload(struct http_request* req) {
 	int hash2 = fnv(req->boundary, boundary_len) - fnv((char*)&now, sizeof(now));
 	char path[1024];
 	snprintf(path, sizeof(path), "/download/%x%x/%s", hash, hash2, file_name);
-	char file_path[1024];
 	//
 
 	start = strstr(start+4, "\r\n\r\n");
@@ -162,7 +163,6 @@ int server_upload(struct http_request* req) {
 	mkdir(&path[1], 0700);
 	*slash_ptr = '/';
 	FILE* f = fopen((char*)&path[1], "wb");
-	printf("%s\n", &file_path[1]);
 	if (!f)
 		return -1;
 	if (fwrite(start, 1, end - start, f) != (size_t)(end - start))
@@ -185,23 +185,78 @@ int server_upload(struct http_request* req) {
 }
 
 const char* extension[] = {
-	".jpg",
-	".jpge",
+	".html",
+	".htm",
 	".txt",
-	".zip"
+	".webm",
+	".mp4",
+	".gif",
+	".png",
+	".jpg",
+	".jpeg",
+	".bmp",
+	".ico",
+	".svg",
+	".pdf",
+	".tar",
+	".zip",
+	".json"
 };
 
 const char* mime[] = {
-	"image/jpeg",
-	"image/jpeg",
+	"text/html",
+	"text/html",
 	"text/plain",
-	"application/zip"
+	"video/webm",
+	"video/mp4",
+	"image/gif",
+	"image/png",
+	"image/jpeg",
+	"image/jpeg",
+	"image/bmp",
+	"image/vnd.microsoft.icon",
+	"image/svg+xml",
+	"application/pdf",
+	"application/tar",
+	"application/zip",
+	"application/json"
 };
 
 int mime_from_extension(const char* ext) {
 	for (size_t i = 0; i < sizeof(mime)/sizeof(char*); i++)
 		if (!strcmp(ext, extension[i])) return i;
 	return -1;
+}
+
+int is_hex(char c) {
+	return ((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') || (c >= '0' && c <= '9'));
+}
+
+int format_path(const char* data, char* buf, int len) {
+	int j = 0;
+	for (int i = 0; data[i] && i < len; i++) {
+		while (data[i] == '%') {
+			char hex[3];
+			hex[0] = data[i+1];
+			if (!is_hex(hex[0])) break;
+			hex[1] = data[i+2];
+			if (!is_hex(hex[1])) break;
+			hex[2] = '\0';
+			char* error = NULL;
+			unsigned int value = strtoul(hex, NULL, 16);
+			if (!value || (error && *error) || value == '.')
+				break;
+			i+=2;
+			buf[j] =  value;
+			j++;
+			goto end;
+		}
+		buf[j] = data[i];
+		j++;
+end:;
+	}
+	buf[j] = 0;
+	return 0;
 }
 
 int server_download(struct http_request* req) {
@@ -226,12 +281,13 @@ int server_download(struct http_request* req) {
 		return -1;
 	file_name++;
 	ptr -= sizeof("/download/") - 2;
-	printf("path %s\n", ptr);
-	FILE* f = fopen(ptr, "rb");
+	char path[1024];
+	format_path(ptr, path, sizeof(path));
+	printf("path %s\n", path);
+	FILE* f = fopen(path, "rb");
 	if (!f) return -1;
 	fseek(f, 0, SEEK_END);
 	size_t length = ftell(f);
-	printf("reading %ld...\n", length);
 	fseek(f, 0, SEEK_SET);
 	char* data = malloc(length);
 	if (fread(data, 1, length, f) != length) {
@@ -358,7 +414,7 @@ int server_recv(struct http_request* req) {
 		req->content = realloc(req->content,
 				req->content_allocated + sizeof(req->packet) * 2);
 		if (copy)
-			memcpy(req->content, req->packet, req->size+1);
+			memcpy(req->content, req->packet, req->size);
 		req->content_allocated += sizeof(req->packet) * 2;
 	}
 	int bytes = recv(req->socket,
