@@ -328,7 +328,7 @@ int server_send(struct http_request* req) {
 	size_t to_send = req->length - req->sent;
 	if (to_send > 32768) to_send = 32768;
 	if (fread(data, 1, to_send, req->data) != to_send) return -1;
-	int ret = send(req->socket, data, to_send, 0);
+	size_t ret = send(req->socket, data, to_send, 0);
 	if (ret <= 0) return -1;
 	req->sent += ret;
 	if (ret != to_send)
@@ -478,18 +478,36 @@ int server_recv(struct http_request* req) {
 }
 
 #include <poll.h>
-struct http_request requests[1024];
-struct pollfd fds[1024];
-int requests_count = 0;
+#define MAX_REQUESTS 4096
+#define TIMEOUT_SINCE_STARTED 1200000
+#define TIMEOUT_SINCE_LAST 10000
+struct http_request requests[MAX_REQUESTS];
+struct pollfd fds[MAX_REQUESTS];
+size_t requests_count = 0;
 
 int new_request() {
-	bzero(&requests[requests_count], sizeof(struct http_request));
-	if (server_accept(&requests[requests_count])) {
+	int new = 1;
+	size_t i = 0;
+	time_t now = time(NULL);
+	for (; i < requests_count; i++)
+		if (requests[i].done ||
+		    now - requests[i].started >= TIMEOUT_SINCE_STARTED ||
+		    now - requests[i].last >= TIMEOUT_SINCE_LAST) {
+			new = 0;
+			break;
+		}
+	if (new && i >= sizeof(requests)/sizeof(struct http_request) - 1) {
 		return -1;
 	}
-	fds[requests_count+1].fd = requests[requests_count].socket;
-	fds[requests_count+1].events = POLLIN;
-	requests_count++;
+	bzero(&requests[i], sizeof(struct http_request));
+	if (server_accept(&requests[i])) {
+		return -1;
+	}
+	fds[i+1].fd = requests[i].socket;
+	fds[i+1].events = POLLIN;
+	requests[i].last = requests[i].started = time(NULL);
+	if (new)
+		requests_count++;
 	return 0;
 }
 
@@ -506,6 +524,7 @@ void print_req(struct http_request* req, int code) {
 }
 
 int server_thread() {
+	bzero(requests, sizeof(requests));
 	fds[0].fd = listener;
 	fds[0].events = POLLIN;
 	while (1) {
@@ -515,9 +534,10 @@ int server_thread() {
 		if (fds[0].revents == POLLIN) {
 			if (new_request()) printf("Failed to accept client\n");
 		}
-		for (int i = 0; i < requests_count; i++) {
+		for (size_t i = 0; i < requests_count; i++) {
 			struct http_request* req = &requests[i];
 			if (fds[i+1].revents == POLLOUT) {
+				requests[i].last = time(NULL);
 				if (req->length == req->sent) {
 					fds[i+1].events = POLLIN;
 					goto clean;
@@ -527,6 +547,7 @@ send_data:;
 				if (ret == 1 || ret == 0) continue;
 			}
 			if (fds[i+1].revents == POLLIN) {
+				requests[i].last = time(NULL);
 				if (requests[i].sent) {
 				} else {
 					int ret = server_recv(req);
@@ -541,11 +562,14 @@ send_data:;
 clean:
 				if (req->packet != req->content) {
 					free(req->content);
-					//free(req->data);
-					fclose(req->data);
+					if (req->data)
+						fclose(req->data);
 				}
 
 				close(req->socket);
+				req->done = 1;
+				if (i == requests_count)
+					requests_count--;
 				bzero(&fds[i+1], sizeof(struct pollfd));
 			}
 		}

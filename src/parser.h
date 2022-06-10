@@ -32,10 +32,12 @@ struct http_request {
 	char* content;
 	size_t content_allocated;
 	char packet[4096];
-	//char* data;
 	size_t length;
 	size_t sent;
 	FILE* data;
+	int done;
+	time_t started;
+	time_t last;
 };
 
 int http_parse(struct http_request* req);
