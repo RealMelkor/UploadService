@@ -149,7 +149,7 @@ int server_upload(struct http_request* req) {
 	if (!end) return -1;
 	end -= 4;
 
-	// path + name
+// path + name
 	char* start = strstr(req->content, "\r\n\r\n");
 	if (!start) start = req->content;
 	char file_name[256];
@@ -538,7 +538,7 @@ int server_thread() {
 			struct http_request* req = &requests[i];
 			if (fds[i+1].revents == POLLOUT) {
 				requests[i].last = time(NULL);
-				if (req->length == req->sent) {
+				if (req->length <= req->sent) {
 					fds[i+1].events = POLLIN;
 					goto clean;
 				}
@@ -571,6 +571,8 @@ clean:
 				if (i == requests_count)
 					requests_count--;
 				bzero(&fds[i+1], sizeof(struct pollfd));
+				fds[i+1].fd = -1;
+				fds[i+1].events = POLLHUP;
 			}
 		}
 	}
