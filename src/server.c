@@ -525,6 +525,8 @@ void print_req(struct http_request* req, int code) {
 
 int server_thread() {
 	bzero(requests, sizeof(requests));
+	for (size_t i = 1; i < sizeof(fds)/sizeof(struct pollfd); i++)
+		fds[i].fd = -1;
 	fds[0].fd = listener;
 	fds[0].events = POLLIN;
 	while (1) {
@@ -538,10 +540,8 @@ int server_thread() {
 			struct http_request* req = &requests[i];
 			if (fds[i+1].revents == POLLOUT) {
 				requests[i].last = time(NULL);
-				if (req->length <= req->sent) {
-					fds[i+1].events = POLLIN;
+				if (req->length <= req->sent)
 					goto clean;
-				}
 send_data:;
 				int ret = server_send(req);
 				if (ret == 1 || ret == 0) continue;
@@ -568,11 +568,10 @@ clean:
 
 				close(req->socket);
 				req->done = 1;
-				if (i == requests_count)
+				if (i + 1 == requests_count)
 					requests_count--;
 				bzero(&fds[i+1], sizeof(struct pollfd));
 				fds[i+1].fd = -1;
-				fds[i+1].events = POLLHUP;
 			}
 		}
 	}
