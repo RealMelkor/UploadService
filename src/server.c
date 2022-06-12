@@ -525,8 +525,10 @@ void print_req(struct http_request* req, int code) {
 
 int server_thread() {
 	bzero(requests, sizeof(requests));
-	for (size_t i = 1; i < sizeof(fds)/sizeof(struct pollfd); i++)
+	for (size_t i = 1; i < sizeof(fds)/sizeof(struct pollfd); i++) {
 		fds[i].fd = -1;
+		fds[i].events = POLLIN;
+	}
 	fds[0].fd = listener;
 	fds[0].events = POLLIN;
 	while (1) {
@@ -534,37 +536,40 @@ int server_thread() {
 		int ready = poll(fds, nfds, -1);
 		if (ready == -1) break;
 		if (fds[0].revents == POLLIN) {
-			if (new_request()) printf("Failed to accept client\n");
+			if (new_request())
+				printf("Failed to accept client\n");
 		}
+		int ret = 0;
 		for (size_t i = 0; i < requests_count; i++) {
 			struct http_request* req = &requests[i];
-			if (fds[i+1].revents == POLLOUT) {
+			switch (fds[i+1].revents) {
+			case 0:
+				break;
+			case POLLOUT:
 				requests[i].last = time(NULL);
 				if (req->length <= req->sent)
 					goto clean;
 send_data:;
-				int ret = server_send(req);
+				ret = server_send(req);
 				if (ret == 1 || ret == 0) continue;
-			}
-			if (fds[i+1].revents == POLLIN) {
+				break;
+			case POLLIN:
 				requests[i].last = time(NULL);
-				if (requests[i].sent) {
-				} else {
-					int ret = server_recv(req);
-					if (ret == 1) continue;
-					if (ret == 0) {
-						http_parse(req);
-						print_req(req, server_serve(req));
+				ret = server_recv(req);
+				if (ret == 1) continue;
+				if (ret == 0) {
+					http_parse(req);
+					print_req(req, server_serve(req));
+					if (req->data) {
 						fds[i+1].events = POLLOUT;
 						goto send_data;
 					}
 				}
 clean:
-				if (req->packet != req->content) {
+				if (req->packet != req->content)
 					free(req->content);
-					if (req->data)
-						fclose(req->data);
-				}
+				if (req->data)
+					fclose(req->data);
 
 				close(req->socket);
 				req->done = 1;
@@ -572,6 +577,11 @@ clean:
 					requests_count--;
 				bzero(&fds[i+1], sizeof(struct pollfd));
 				fds[i+1].fd = -1;
+				fds[i+1].events = POLLIN;
+				break;
+			default:
+				fds[i+1].fd = -1;
+				fds[i+1].events = POLLIN;
 			}
 		}
 	}
