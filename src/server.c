@@ -209,6 +209,13 @@ const char* extension[] = {
 	".html",
 	".htm",
 	".txt",
+	".aac",
+	".mp3",
+	".flac",
+	".ogg",
+	".wav",
+	".midi",
+	".avi",
 	".webm",
 	".mp4",
 	".gif",
@@ -228,6 +235,13 @@ const char* mime[] = {
 	"text/html",
 	"text/html",
 	"text/plain",
+	"audio/mpeg",
+	"audio/mpeg",
+	"audio/flac",
+	"audio/ogg",
+	"audio/wav",
+	"audio/midi",
+	"video/x-msvideo",
 	"video/webm",
 	"video/mp4",
 	"image/gif",
@@ -245,7 +259,7 @@ const char* mime[] = {
 
 int mime_from_extension(const char* ext) {
 	for (size_t i = 0; i < sizeof(mime)/sizeof(char*); i++)
-		if (!strcmp(ext, extension[i])) return i;
+		if (!strcasecmp(ext, extension[i])) return i;
 	return -1;
 }
 
@@ -404,6 +418,7 @@ int server_init(int port) {
 	}
 	print_now();
 	printf("Listening on port %d\n", port);
+	fflush(stdout); // to print log in sfm on illumos
 	return 0;
 }
 
@@ -512,6 +527,7 @@ int new_request() {
 }
 
 void print_req(struct http_request* req, int code) {
+	print_now();
 #ifdef NO_PROXY
 	uint8_t* ptr = (uint8_t*)&req->addr.sin_addr.s_addr;
 	printf("%d.%d.%d.%d, %s, requested %s [%d]\n",
@@ -520,7 +536,7 @@ void print_req(struct http_request* req, int code) {
 	printf("%s, %s, requested %s [%d]\n",
 	       req->xrealip, req->useragent, req->uri, code);
 #endif
-
+	fflush(stdout); // to print log in sfm on illumos
 }
 
 int server_thread() {
@@ -536,8 +552,11 @@ int server_thread() {
 		int ready = poll(fds, nfds, -1);
 		if (ready == -1) break;
 		if (fds[0].revents == POLLIN) {
-			if (new_request())
+			if (new_request()) {
+				print_now();
 				printf("Failed to accept client\n");
+				fflush(stdout);
+			}
 		}
 		int ret = 0;
 		for (size_t i = 0; i < requests_count; i++) {
