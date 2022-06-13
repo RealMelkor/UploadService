@@ -64,6 +64,7 @@ struct sock_filter filter[] = {
 	SC_ALLOW(write),
         SC_ALLOW(readv),
         SC_ALLOW(writev),
+        SC_ALLOW(creat),
         SC_ALLOW(open),
 	SC_ALLOW(openat),
 	SC_ALLOW(ioctl),
@@ -81,6 +82,8 @@ struct sock_filter filter[] = {
 	SC_ALLOW(socket),
         SC_ALLOW(getsockopt),
 	SC_ALLOW(poll),
+	SC_ALLOW(mmap),
+	SC_ALLOW(munmap),
 	BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL),
 };
 
