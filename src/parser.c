@@ -84,8 +84,8 @@ int get_parameter(struct http_request* req, char* name, int len, char** ptr, int
 }
 
 int http_parse(struct http_request* req) {
-	const char* end = req->content + req->size;
-	const char* ptr = req->content;
+	const char* end = req->packet + req->size;
+	const char* ptr = req->packet;
 	int i = 0;
 	const char* pos[3];
 	// header
@@ -103,9 +103,9 @@ int http_parse(struct http_request* req) {
 		i++;
 	}
 	char buf[64];
-	size_t len = pos[0] - req->content;
+	size_t len = pos[0] - req->packet;
 	if (len >= sizeof(buf)) return -2;
-	strlcpy(buf, req->content, len);
+	strlcpy(buf, req->packet, len);
 	req->method = parse_method(buf, len);
 	len = pos[1] - pos[0];
 	if (len >= sizeof(req->uri)) return -2;

@@ -31,13 +31,15 @@ struct http_request {
 	size_t size;
 	char* content;
 	size_t content_allocated;
-	char packet[4096];
+	char packet[32768];
 	size_t length;
 	size_t sent;
 	FILE* data;
 	int done;
 	time_t started;
 	time_t last;
+	char header[1024];
+	char updata[4096];
 };
 
 int http_parse(struct http_request* req);

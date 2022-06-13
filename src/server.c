@@ -129,7 +129,7 @@ int path_to_url(const char* path, char* url, int len) {
 		if ((c >= 'a' && c <= 'z') ||
 		    (c >= 'A' && c <= 'Z') ||
 		    (c >= '0' && c <= '9') ||
-		    c == '.' || c == '/') {
+		    c == '.' || c == '/' || c == '_') {
 			url[j] = path[i];
 			j++;
 			continue;
@@ -142,16 +142,11 @@ int path_to_url(const char* path, char* url, int len) {
 }
 
 int server_upload(struct http_request* req) {
-	if (!req->content) return -1;
-		int boundary_len = strnlen(req->boundary, sizeof(req->boundary));
-	char* end = memmem(&req->content[req->size - boundary_len*2], boundary_len * 2, 
-			   req->boundary, boundary_len);
-	if (!end) return -1;
-	end -= 4;
-
+	int boundary_len = strnlen(req->boundary, sizeof(req->boundary));
+	char* end = req->content + req->length;
 // path + name
-	char* start = strstr(req->content, "\r\n\r\n");
-	if (!start) start = req->content;
+	char* start = strstr(req->packet, "\r\n\r\n");
+	if (!start) start = req->packet;
 	char file_name[256];
 	char* name_ptr = strstr(start, "filename=\"");
 	int name_fail = 1;
@@ -163,9 +158,8 @@ int server_upload(struct http_request* req) {
 			name_fail = 0;
 		}
 	}
-	if (name_fail) {
+	if (name_fail)
 		strlcpy(file_name, "generic.dat", sizeof(file_name));
-	}
 	time_t now = time(NULL);
 	int hash = fnv(start, end - start) + fnv((char*)&now, sizeof(now));
 	int hash2 = fnv(req->boundary, boundary_len) - fnv((char*)&now, sizeof(now));
@@ -175,7 +169,6 @@ int server_upload(struct http_request* req) {
 
 	start = strstr(start+4, "\r\n\r\n");
 	if (!start) start = req->content;
-	start += 4;
 	char* slash_ptr = strrchr(path, '/');
 	if (!slash_ptr) return -1;
 	*slash_ptr = '\0';
@@ -184,24 +177,12 @@ int server_upload(struct http_request* req) {
 	FILE* f = fopen((char*)&path[1], "wb");
 	if (!f)
 		return -1;
-	if (fwrite(start, 1, end - start, f) != (size_t)(end - start))
-		return -1;
-	fclose(f);
-	//
-	char data[4096];
+	req->data = f;
 	char url[2048];
 	path_to_url(path, url, sizeof(url));
-	int len = snprintf(data, sizeof(data), data_upload, url, file_name);
-	char up_header[1024];
-	snprintf(up_header, sizeof(up_header), header, len, "text/html");
-	char packet[4096];
-	size_t size = snprintf(packet, sizeof(packet), "%s%s", up_header, data);
-	size_t bytes = 0;
-	while (bytes < size) {
-		int ret = send(req->socket, &packet[bytes], size - bytes, 0);
-		if (ret <= 0) break;
-		bytes += ret;
-	}
+	int len = snprintf(req->updata, sizeof(req->updata), data_upload, url, file_name);
+	snprintf(req->header, sizeof(req->header), header, len, "text/html");
+	http_parse(req);
 	return 0;
 }
 
@@ -352,10 +333,6 @@ int server_send(struct http_request* req) {
 }
 
 int server_serve(struct http_request* req) {
-	if (req->method == POST && !strncmp(req->uri, "/upload", sizeof(req->uri))) {
-		if (!server_upload(req)) return 200;
-		else goto err_404;
-	}
 	if (req->method == GET && !strncmp(req->uri, "/download/", sizeof("/download/") - 1)) {
 		if (!server_download(req)) return 200;
 		else goto err_404;
@@ -435,34 +412,13 @@ int server_accept(struct http_request* req) {
 }
 
 int server_recv(struct http_request* req) {
-	if (req->size < sizeof(req->packet) - sizeof(req->packet)/4) {
-		req->content = (char*)req->packet;
-	} else if (req->size + sizeof(req->packet)*2 >= req->content_allocated){
-		int copy = 0;
-		if (req->content == req->packet) {
-			req->content = NULL;
-			copy = 1;
-		}
-		req->content = realloc(req->content,
-				req->content_allocated + sizeof(req->packet) * 2);
-		if (copy)
-			memcpy(req->content, req->packet, req->size);
-		req->content_allocated += sizeof(req->packet) * 2;
-	}
 	int bytes = recv(req->socket,
-			(req->content == req->packet)?
-			(&req->content[req->size]):
-			req->packet,
-			(req->content == req->packet)?
-			(sizeof(req->packet) - req->size):
-			sizeof(req->packet),
+			req->data?req->packet:&req->packet[req->size],
+			req->data?sizeof(req->packet):(sizeof(req->packet) - req->size),
 			0);
 	if (bytes <= 0) return -1;
-	if (req->content != req->packet) {
-		memcpy(&req->content[req->size], req->packet, bytes);
-	}
 	if (!req->boundary_found) {
-		char* ptr = strstr(&req->content[req->size], "boundary=");
+		char* ptr = strstr(&req->packet[req->size], "boundary=");
 		if (ptr) {
 			ptr += sizeof("boundary=");
 			char* start = ptr;	
@@ -472,28 +428,51 @@ int server_recv(struct http_request* req) {
 		}
 	}
 	req->size += bytes;
-	while (req->boundary_found) {
-		char* ptr = strstr(req->content, req->boundary);
+	char* data_ptr = req->packet;
+	char* end = NULL;
+	int blen;
+	if (req->boundary_found)
+		blen = strnlen(req->boundary, sizeof(req->boundary));
+	while (!req->data && req->boundary_found) {
+		char* ptr = strstr(req->packet, req->boundary);
 		if (!ptr) break;
-		ptr = strstr(ptr+1, req->boundary);
+		ptr = strstr(ptr+blen, req->boundary);
 		if (!ptr) break;
-		int blen = strnlen(req->boundary, sizeof(req->boundary));
-		void* end = memmem(&req->content[req->size - blen * 2 + 1], bytes, req->boundary, blen);
-		if (!end || end <= (void*)ptr) break;
-		return 0;
+		req->content = ptr + strnlen(req->boundary, sizeof(req->boundary));
+		req->length = req->size - (req->content - req->packet);
+		server_upload(req);
+		end = strstr(req->packet+req->size-blen-8, req->boundary);
+		data_ptr = strstr(req->content+4, "\r\n\r\n") + 4;
+		bytes = req->size - (data_ptr - req->packet);
+		break;
+	}
+	if (req->data) {
+		if (!end && data_ptr == req->packet)
+			end = strstr(data_ptr + bytes - blen - 8, req->boundary);
+		fwrite(data_ptr, 1, end?(end - data_ptr - 4):bytes, req->data);
+		if (!end) return 1;
+		char packet[4096];
+		size_t size = snprintf(packet, sizeof(packet), "%s%s", req->header, req->updata);
+		size_t bytes = 0;
+		while (bytes < size) {
+			int ret = send(req->socket, &packet[bytes], size - bytes, 0);
+			if (ret <= 0) break;
+			bytes += ret;
+		}
+		return 2;
 	}
 	if (!req->boundary_found &&
-	    req->content[req->size-1] == '\n' &&
-	    req->content[req->size-2] == '\r' &&
-	    req->content[req->size-3] == '\n' &&
-	    req->content[req->size-4] == '\r') {
+	    req->packet[req->size-1] == '\n' &&
+	    req->packet[req->size-2] == '\r' &&
+	    req->packet[req->size-3] == '\n' &&
+	    req->packet[req->size-4] == '\r') {
 		return 0;
 	}
 	return 1;
 }
 
 #include <poll.h>
-#define MAX_REQUESTS 4096
+#define MAX_REQUESTS 24 //4096
 #define TIMEOUT_SINCE_STARTED 1200000
 #define TIMEOUT_SINCE_LAST 10000
 struct http_request requests[MAX_REQUESTS];
@@ -576,7 +555,12 @@ send_data:;
 				requests[i].last = time(NULL);
 				ret = server_recv(req);
 				if (ret == 1) continue;
+				if (ret == 2) print_req(req, 200);
 				if (ret == 0) {
+					if (req->data) {
+						fclose(req->data);
+						req->data = NULL;
+					}
 					http_parse(req);
 					print_req(req, server_serve(req));
 					if (req->data) {
@@ -585,8 +569,6 @@ send_data:;
 					}
 				}
 clean:
-				if (req->packet != req->content)
-					free(req->content);
 				if (req->data)
 					fclose(req->data);
 
