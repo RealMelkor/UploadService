@@ -4,8 +4,9 @@
 
 #ifdef __OpenBSD__
 int sandbox_start() {
+	unveil("download", "rwc");
 	unveil(NULL, NULL);
-	pledge("stdio inet", NULL);
+	pledge("stdio inet rpath wpath cpath", NULL);
 	return 0;
 }
 #else
