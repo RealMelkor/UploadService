@@ -472,7 +472,7 @@ int server_recv(struct http_request* req) {
 }
 
 #include <poll.h>
-#define MAX_REQUESTS 24 //4096
+#define MAX_REQUESTS 1024 //4096
 #define TIMEOUT_SINCE_STARTED 1200000
 #define TIMEOUT_SINCE_LAST 10000
 struct http_request requests[MAX_REQUESTS];
