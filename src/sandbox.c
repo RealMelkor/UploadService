@@ -65,6 +65,7 @@ struct sock_filter filter[] = {
         SC_ALLOW(readv),
         SC_ALLOW(writev),
         SC_ALLOW(creat),
+        SC_ALLOW(sendfile),
         SC_ALLOW(open),
 	SC_ALLOW(openat),
 	SC_ALLOW(ioctl),

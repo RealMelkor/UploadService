@@ -1,4 +1,4 @@
-#define _GNU_SOURCE
+#include <sys/sendfile.h>
 #include "server.h"
 #include "parser.h"
 #include <stdint.h>
@@ -8,7 +8,9 @@
 #include <strings.h>
 #include <time.h>
 #include <unistd.h>
+#include <fcntl.h>
 #ifdef __linux__
+#define _GNU_SOURCE
 size_t
 strlcpy(char *dst, const char *src, size_t dsize);
 #endif
@@ -174,10 +176,10 @@ int server_upload(struct http_request* req) {
 	*slash_ptr = '\0';
 	mkdir(&path[1], 0700);
 	*slash_ptr = '/';
-	FILE* f = fopen((char*)&path[1], "wb");
-	if (!f)
+	int fd = open((char*)&path[1], O_WRONLY|O_CREAT, 0644);
+	if (fd < 0)
 		return -1;
-	req->data = f;
+	req->data = fd;
 	char url[2048];
 	path_to_url(path, url, sizeof(url));
 	int len = snprintf(req->updata, sizeof(req->updata), data_upload, url, file_name);
@@ -299,13 +301,14 @@ int server_download(struct http_request* req) {
 	ptr -= sizeof("/download/") - 2;
 	char path[1024];
 	format_path(ptr, path, sizeof(path));
-	FILE* f = fopen(path, "rb");
-	if (!f) return -1;
+	int fd = open(path, O_RDONLY);
+	if (fd < 0) return -1;
+	FILE* f = fdopen(fd, "rb");
 	fseek(f, 0, SEEK_END);
 	size_t length = ftell(f);
 	fseek(f, 0, SEEK_SET);
 	req->length = length;
-	req->data = f;
+	req->data = fd;
 	char header_buf[1024];
 	// mime
 	char* ext = strrchr(file_name, '.');
@@ -319,15 +322,12 @@ int server_download(struct http_request* req) {
 }
 
 int server_send(struct http_request* req) {
-	char data[32768];
+	if (req->data < 0 && req->socket < 0) return -1;
 	size_t to_send = req->length - req->sent;
 	if (to_send > 32768) to_send = 32768;
-	if (fread(data, 1, to_send, req->data) != to_send) return -1;
-	size_t ret = send(req->socket, data, to_send, 0);
+	size_t ret = sendfile(req->socket, req->data, NULL, to_send);
 	if (ret <= 0) return -1;
 	req->sent += ret;
-	if (ret != to_send)
-		fseek(req->data, req->sent, SEEK_SET);
 	if (req->sent >= req->length) return 0;
 	return 1;
 }
@@ -449,7 +449,7 @@ int server_recv(struct http_request* req) {
 	if (req->data) {
 		if (!end && data_ptr == req->packet)
 			end = strstr(data_ptr + bytes - blen - 8, req->boundary);
-		fwrite(data_ptr, 1, end?(end - data_ptr - 4):bytes, req->data);
+		write(req->data, data_ptr, end?(end - data_ptr - 4):bytes);
 		if (!end) return 1;
 		char packet[4096];
 		size_t size = snprintf(packet, sizeof(packet), "%s%s", req->header, req->updata);
@@ -549,7 +549,14 @@ int server_thread() {
 					goto clean;
 send_data:;
 				ret = server_send(req);
-				if (ret == 1 || ret == 0) continue;
+				if (ret == 1) continue;
+				if (ret == 0) {
+					close(req->data);
+					close(req->socket);
+					req->data = -1;
+					req->socket = -1;
+					continue;
+				}
 				break;
 			case POLLIN:
 				requests[i].last = time(NULL);
@@ -557,20 +564,20 @@ send_data:;
 				if (ret == 1) continue;
 				if (ret == 2) print_req(req, 200);
 				if (ret == 0) {
-					if (req->data) {
-						fclose(req->data);
-						req->data = NULL;
+					if (req->data > -1) {
+						close(req->data);
+						req->data = -1;
 					}
 					http_parse(req);
 					print_req(req, server_serve(req));
-					if (req->data) {
+					if (req->data > -1) {
 						fds[i+1].events = POLLOUT;
 						goto send_data;
 					}
 				}
 clean:
-				if (req->data)
-					fclose(req->data);
+				if (req->data < 0)
+					close(req->data);
 
 				close(req->socket);
 				req->done = 1;

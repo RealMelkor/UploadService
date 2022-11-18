@@ -16,6 +16,7 @@ enum method {
 #include <stdio.h>
 struct http_request {
 	int socket;
+	int data;
 	struct sockaddr_in addr;
 	enum method method;
 	char host[512];
@@ -34,7 +35,6 @@ struct http_request {
 	char packet[32768];
 	size_t length;
 	size_t sent;
-	FILE* data;
 	int done;
 	time_t started;
 	time_t last;
