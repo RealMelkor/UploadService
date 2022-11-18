@@ -1,6 +1,12 @@
 /* See LICENSE for license details. */
-#ifndef __OpenBSD__
+#if defined(__linux__) || defined(__sun)
 #include <sys/sendfile.h>
+#endif
+#ifdef __FreeBSD__
+#define __BSD_VISIBLE 1
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/uio.h>
 #endif
 #include "server.h"
 #include "parser.h"
@@ -367,6 +373,11 @@ server_send(struct http_request* req)
 	ret = read(req->data, packet, to_send);
 	ret = send(req->socket, packet, ret, 0);
 	req->sent += ret;
+#elif __FreeBSD__
+	ret = sendfile(req->data, req->socket, offset,
+		       to_send, NULL, &offset, 0);
+	if (!ret) ret = 1;
+	req->sent += offset;
 #else
 	ret = sendfile(req->socket, req->data, &offset, to_send);
 	req->sent = offset;

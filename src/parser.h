@@ -2,6 +2,10 @@
 #ifndef PARSER_H
 #define PARSER_H
 
+#include <netinet/in.h>
+#include <stdio.h>
+#include <time.h>
+
 enum method {
 	GET,
 	HEAD,
@@ -13,8 +17,6 @@ enum method {
 	TRACE
 };
 
-#include <netinet/in.h>
-#include <stdio.h>
 struct http_request {
 	int socket;
 	int data;
