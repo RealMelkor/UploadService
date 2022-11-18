@@ -4,9 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#ifdef __linux__
 size_t strlcpy(char*, const char*, size_t);
-#endif
 
 const char* methods[] = {
 	"GET",

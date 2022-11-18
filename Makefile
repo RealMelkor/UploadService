@@ -1,13 +1,16 @@
 SHELL = /bin/sh
 
 PREFIX = /usr/local
-CFLAGS = -ansi -std=c89 -pedantic -Wall -Wpedantic -Wextra \
+
+CFLAGS = -ansi -std=c89 -pedantic -Wall -Wextra \
 	 -O2 -D_POSIX_C_SOURCE=200809L
 CC = cc
 # Uncomment to build on Illumos
-#CFLAGS = -O2 -Wall -Wpedantic -Wextra -lsocket
+#CFLAGS = -ansi -std=c89 -pedantic -O2 -Wall -Wextra -lsocket -lsendfile
 #CC = gcc
-SRC = src/main.c src/parser.c src/server.c src/sandbox.c src/strlcpy.c
+
+SRC = src/main.c src/parser.c src/server.c src/sandbox.c src/strlcpy.c \
+      -D_POSIX_C_SOURCE=200809L
 
 upload: src/*
 	${CC} ${SRC} ${CFLAGS} -o $@

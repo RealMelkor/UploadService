@@ -1,5 +1,7 @@
 /* See LICENSE for license details. */
+#ifndef __OpenBSD__
 #include <sys/sendfile.h>
+#endif
 #include "server.h"
 #include "parser.h"
 #include <stdint.h>
@@ -11,10 +13,11 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <stdio.h>
-#ifdef __linux__
+#ifdef __sun
+#include <signal.h>
+#endif
 #define _GNU_SOURCE
 size_t strlcpy(char*, const char*, size_t);
-#endif
 
 char header[] = 
 "HTTP/1.0 200 OK\r\n"
@@ -181,7 +184,8 @@ server_upload(struct http_request* req)
 	if (name_fail)
 		strlcpy(file_name, "generic.dat", sizeof(file_name));
 	snprintf(path, sizeof(path), "/download/%08X%08X/%s",
-		 rand(), rand(), file_name);
+		 (unsigned)(rand() * rand() + rand()),
+		 (unsigned)(rand() * rand() - rand()), file_name);
 
 	start = strstr(start+4, "\r\n\r\n");
 	if (!start) start = req->content;
@@ -349,14 +353,24 @@ server_download(struct http_request* req)
 int
 server_send(struct http_request* req)
 {
-	size_t to_send, ret;
+#ifdef __OpenBSD__
+	char packet[32768];
+#endif
+	size_t to_send;
+	int ret;
 	off_t offset = req->sent;
 
 	if (req->data < 0 || req->socket < 0) return -1;
 	to_send = req->length - req->sent;
 	if (to_send > 32768) to_send = 32768;
+#ifdef __OpenBSD__
+	ret = read(req->data, packet, to_send);
+	ret = send(req->socket, packet, ret, 0);
+	req->sent += ret;
+#else
 	ret = sendfile(req->socket, req->data, &offset, to_send);
 	req->sent = offset;
+#endif
 
 	if (ret <= 0) return -1;
 	if (req->sent >= req->length) return 0;
@@ -422,6 +436,10 @@ server_init(int port)
         sl.l_linger = 0;
         setsockopt(listener, SOL_SOCKET, SO_LINGER, &sl, sizeof(sl));
 #endif
+#ifdef __sun
+	signal(SIGPIPE, SIG_IGN);
+#endif
+
 	memset(&addr, 0, sizeof(addr));
 	addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -621,7 +639,7 @@ send_data:;
 					continue;
 				}
 				if (ret == 1) continue;
-				break;
+				goto clean;
 			case POLLIN:
 				requests[i].last = time(NULL);
 				ret = server_recv(req);
@@ -640,10 +658,13 @@ send_data:;
 					}
 				}
 clean:
-				if (req->data > -1)
+				if (req->data > -1) {
 					close(req->data);
+					req->data = -1;
+				}
 
 				close(req->socket);
+				req->socket = -1;
 				req->done = 1;
 				if (i + 1 == requests_count)
 					requests_count--;
