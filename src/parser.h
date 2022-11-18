@@ -1,3 +1,4 @@
+/* See LICENSE for license details. */
 #ifndef PARSER_H
 #define PARSER_H
 

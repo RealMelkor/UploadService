@@ -1,35 +1,11 @@
+/* See LICENSE for license details. */
 #include "parser.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #ifdef __linux__
-// OpenBSD implementation of strlcpy
-// https://github.com/libressl-portable/openbsd/blob/master/src/lib/libc/string/strlcpy.c
-size_t
-strlcpy(char *dst, const char *src, size_t dsize)
-{
-	const char *osrc = src;
-	size_t nleft = dsize;
-
-	/* Copy as many bytes as will fit. */
-	if (nleft != 0) {
-		while (--nleft != 0) {
-			if ((*dst++ = *src++) == '\0')
-				break;
-		}
-	}
-
-	/* Not enough room in dst, add NUL and traverse rest of src. */
-	if (nleft == 0) {
-		if (dsize != 0)
-			*dst = '\0';		/* NUL-terminate dst */
-		while (*src++)
-			;
-	}
-
-	return(src - osrc - 1);	/* count does not include NUL */
-}
+size_t strlcpy(char*, const char*, size_t);
 #endif
 
 const char* methods[] = {
@@ -43,13 +19,19 @@ const char* methods[] = {
 	"TRACE"
 };
 
-int parse_method(const char* method, size_t len) {
-	for (size_t i = 0; i < sizeof(methods)/sizeof(const char*); i++)
+int
+parse_method(const char* method, size_t len)
+{
+	size_t i;
+	for (i = 0; i < sizeof(methods)/sizeof(const char*); i++)
 		if (!strncmp(method, methods[i], len)) return i;
 	return -1;
 }
 
-int get_parameter(struct http_request* req, char* name, int len, char** ptr, int* psizeof) {
+int
+get_parameter(struct http_request* req, char* name, int len,
+	      char** ptr, int* psizeof)
+{
 	if (!strncmp(name, "Host", len)) {
 		*ptr = req->host;
 		*psizeof = sizeof(req->host);
@@ -83,12 +65,20 @@ int get_parameter(struct http_request* req, char* name, int len, char** ptr, int
 	return -1;
 }
 
-int http_parse(struct http_request* req) {
+int
+http_parse(struct http_request* req)
+{
+	const char *pos[3], *start;
+	char buf[64];
+	size_t len;
 	const char* end = req->packet + req->size;
 	const char* ptr = req->packet;
+	int in_value = 0;
+	char parameter[4096];
+	char* value = NULL;
+	int sizeof_value = 0;
 	int i = 0;
-	const char* pos[3];
-	// header
+	/* header */
 	while (++ptr && ptr < end - 1) {
 		if (*ptr == '\r' && *(ptr+1) == '\n') {
 			pos[i] = ptr;
@@ -102,8 +92,7 @@ int http_parse(struct http_request* req) {
 		pos[i] = ptr+1;
 		i++;
 	}
-	char buf[64];
-	size_t len = pos[0] - req->packet;
+	len = pos[0] - req->packet;
 	if (len >= sizeof(buf)) return -2;
 	strlcpy(buf, req->packet, len);
 	req->method = parse_method(buf, len);
@@ -114,18 +103,15 @@ int http_parse(struct http_request* req) {
 	if (len >= sizeof(req->version)) return -2;
 	strlcpy(req->version, pos[1], len);
 
-	// parameters
-	int in_value = 0;
-	char parameter[4096];
-	char* value = NULL;
-	int sizeof_value = 0;
+	/* parameters */
 	ptr+=2;
-	const char* start = ptr;
+	start = ptr;
 	ptr--;
 	req->boundary_found = 0;
 	while (ptr++ && ptr < end - 1) {
 		if ((ptr-1)[0] == '\n' && req->boundary_found &&
-		    !memcmp(ptr, req->boundary, strnlen(req->boundary, sizeof(req->boundary)))) {
+		    !memcmp(ptr, req->boundary,
+			    strnlen(req->boundary, sizeof(req->boundary)))) {
 			start = ptr;
 			break;
 		}
@@ -133,7 +119,8 @@ int http_parse(struct http_request* req) {
 		    !memcmp(ptr, "boundary=", sizeof("boundary=")-1)) {
 			const char* bstart = ptr + sizeof("boundary=") - 1;
 			ptr += sizeof("boundary=") - 2;
-			while (ptr++ && ptr < end - 1 && *ptr != '\n' && *ptr != '\r')
+			while (ptr++ && ptr < end - 1 &&
+			       *ptr != '\n' && *ptr != '\r')
 				req->boundary[ptr - bstart] = *ptr;
 			req->boundary_found = 1;
 		}
@@ -143,9 +130,8 @@ int http_parse(struct http_request* req) {
 			in_value = 0;
 		}
 		if (!in_value && *ptr == ':') {
-			if ((size_t)(ptr - start) > sizeof(parameter)) {
+			if ((size_t)(ptr - start) > sizeof(parameter))
 				return -1;
-			}
 			strlcpy(parameter, start, ptr - start + 1);
 			if (!get_parameter(req, parameter, sizeof(parameter),
 					   &value, &sizeof_value)) {
@@ -159,9 +145,8 @@ int http_parse(struct http_request* req) {
 			start = ptr;
 		}
 		if (in_value) {
-			if (ptr - start > sizeof_value) {
+			if (ptr - start > sizeof_value)
 				return -1;
-			}
 			value[ptr - start] = *ptr;
 		}
 	}
