@@ -8,6 +8,7 @@ UploadService doesn't have any dependencies, using the make command should build
 
 Tested on :
 * Linux
+* Illumos
 * FreeBSD
 * OpenBSD
-* Illumos
+* NetBSD

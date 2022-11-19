@@ -1,8 +1,10 @@
 /* See LICENSE for license details. */
 #if defined(__linux__) || defined(__sun)
+#define HAS_SENDFILE
 #include <sys/sendfile.h>
 #endif
 #ifdef __FreeBSD__
+#define HAS_SENDFILE
 #define __BSD_VISIBLE 1
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -359,17 +361,18 @@ server_download(struct http_request* req)
 int
 server_send(struct http_request* req)
 {
-#ifdef __OpenBSD__
+#ifndef HAS_SENDFILE
 	char packet[32768];
+#else
+	off_t offset = req->sent;
 #endif
 	size_t to_send;
 	int ret;
-	off_t offset = req->sent;
 
 	if (req->data < 0 || req->socket < 0) return -1;
 	to_send = req->length - req->sent;
 	if (to_send > 32768) to_send = 32768;
-#ifdef __OpenBSD__
+#ifndef HAS_SENDFILE
 	ret = read(req->data, packet, to_send);
 	ret = send(req->socket, packet, ret, 0);
 	req->sent += ret;
