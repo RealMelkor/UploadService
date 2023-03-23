@@ -10,7 +10,7 @@ CC = cc
 #CC = gcc
 
 SRC = src/main.c src/parser.c src/server.c src/sandbox.c src/strlcpy.c \
-      -D_POSIX_C_SOURCE=200809L
+      -D_POSIX_C_SOURCE=200809L #-DNO_PROXY -DNO_SANDBOX
 
 upload: src/*
 	${CC} ${SRC} ${CFLAGS} -o $@

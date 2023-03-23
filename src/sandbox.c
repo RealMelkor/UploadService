@@ -170,7 +170,9 @@ int
 sandbox_start()
 {
 	struct sock_fprog prog = {0};
+#ifdef ENABLE_LANDLOCK
 	int llfd, download;
+#endif
 
 	if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)) {
 		printf("PR_SET_NO_NEW_PRIVS failed\n");
