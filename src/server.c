@@ -202,7 +202,7 @@ server_upload(struct http_request* req)
 	*slash_ptr = '\0';
 	mkdir(&path[1], 0700);
 	*slash_ptr = '/';
-	fd = open((char*)&path[1], O_RDWR|O_CREAT, 0600);
+	fd = open((char*)&path[1], O_WRONLY | O_CREAT, 0600);
 	if (fd < 0)
 		return -1;
 	req->data = fd;
@@ -339,13 +339,18 @@ server_download(struct http_request* req)
 	file_name++;
 	ptr -= sizeof("/download/") - 2;
 	format_path(ptr, path, sizeof(path));
-	fd = open(path, O_RDWR);
+	fd = open(path, O_RDONLY);
 	if (fd < 0) return -1;
 	f = fdopen(fd, "rb");
 	fseek(f, 0, SEEK_END);
 	length = ftell(f);
 	fseek(f, 0, SEEK_SET);
 	req->length = length;
+#ifdef __CYGWIN__
+	fclose(f);
+	fd = open(path, O_RDONLY);
+	if (fd < 0) return -1;
+#endif
 	req->data = fd;
 	/* mime */
 	ext = strrchr(file_name, '.');
